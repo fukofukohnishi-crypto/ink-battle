@@ -7706,7 +7706,6 @@ function showWeaponTab(cat){
       <div class="wc-bars">${barsHTML}</div>
     `;
     card.onclick = () => {
-      if(!owned) return; // 未解放は選択不可
       selectedWeaponId = id;
       document.querySelectorAll('#weapon-grid .weapon-card').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
