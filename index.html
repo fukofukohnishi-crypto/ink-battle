@@ -4776,10 +4776,15 @@ function applyDamage(ch, amount, attacker){
   ch.invuln = 0.25 + invulnBonus;
   const actualAmount = (ch.tonicTimer > 0) ? (amount||1) / TONIC_TOUGHNESS_MULT : (amount||1);
   ch.hits += actualAmount;
+  // ボス専用HP判定(通常のHITS_PER_LIFEとは別に管理)
+  if(ch === cpu && ch._bossMaxHp && ch.hits >= ch._bossMaxHp){
+    ch.hits = ch._bossMaxHp;
+    ch.alive = false; ch.downed = true;
+    return;
+  }
   if(ch.hits >= HITS_PER_LIFE){
     ch.hits = 0;
     ch.ko += 1;
-    // 攻撃者が明示されていればその人物にkillsを加算。不明の場合は加算しない
     if(attacker && attacker !== ch && attacker.kills !== undefined){
       attacker.kills += 1;
     }
@@ -6780,6 +6785,11 @@ function fireCpuWeaponAtTarget(self, target, dt, dist, dx, dz, yawDiff){
 function pickNearestEnemy(self){
   let best = null, bestDist = Infinity;
 
+  // ボスは常にプレイヤーを最優先
+  if(self === cpu && self._bossPhase && player.alive && !player.downed){
+    return player;
+  }
+
   // サモランモードで味方チームの場合はシャケを敵として返す
   if(selectedBattleMode === 'salmon' && self.team === 'ally'){
     for(const s of salmonEntities){
@@ -8085,16 +8095,56 @@ function initHeroMode(){
     salmonSpawned=0; salmonRemaining=heroStage.goal;
     showCenterMessage(`🌊 シャケ${heroStage.goal}体を倒せ！`);
   } else if(stageType === 'boss'){
-    // ボス: cpu1体を超強化
     extraEnemies.forEach(ch=>{ ch.alive=false; if(ch.group) ch.group.visible=false; });
-    // ボスの体力・スピードを大幅強化
+    extraAllies.forEach(ch=>{ ch.alive=false; if(ch.group) ch.group.visible=false; });
+
+    resetCharState(cpu);
     cpu.alive=true; if(cpu.group) cpu.group.visible=true;
-    cpu.hits=0; cpu._bossHp = HITS_PER_LIFE * 8; // 8倍HP
-    cpu.tonicTimer=99999; // 常にトニック状態
-    cpu.invuln=0;
-    // ボス用の見た目変更(スケール2倍)
-    cpu.group.scale.set(2,2,2);
-    showCenterMessage('👹 ボス登場！');
+    cpu.hits=0;
+    cpu._bossMaxHp  = HITS_PER_LIFE * 30; // 30倍HP(3段階分)
+    cpu._bossHp     = cpu._bossMaxHp;
+    cpu._bossPhase  = 1;
+    cpu.tonicTimer  = 99999;
+    cpu.invuln      = 0;
+    cpu.ultGauge    = 0;
+    cpu._bossTarget = player;
+    cpu._bossThrowTimer = 0;
+    // フェーズ1武器
+    cpu._bossWeapons = ['classic_sniper','standard_shooter','classic_blade','standard_parasol'];
+    cpu._bossWeaponIdx = 0;
+    cpu.weapon = 'classic_sniper';
+    cpu.gear = { top:'t14', bottom:'b20', shoe:'s20' };
+
+    cpu.group.scale.set(2.5, 2.5, 2.5);
+
+    // ボス名ズーム演出
+    heroActive = false;
+    player.invuln = 5.0;
+
+    const bossNameEl = document.createElement('div');
+    bossNameEl.id = 'boss-intro';
+    bossNameEl.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:50;pointer-events:none;opacity:0;transition:opacity 0.5s;';
+    bossNameEl.innerHTML = `
+      <div style="color:#ff4400;font-size:13px;letter-spacing:6px;font-weight:700;margin-bottom:8px;">— STAGE 5 BOSS —</div>
+      <div style="color:#ffdd00;font-size:34px;font-weight:900;letter-spacing:4px;text-shadow:0 0 30px #ff8800,0 0 60px #ff4400;">ダークインクマスター</div>
+      <div style="color:#aaa;font-size:12px;margin-top:8px;">全武器・全ボム・全必殺技を操る最強の敵</div>
+      <div style="color:#ff8800;font-size:11px;margin-top:4px;">HP: ████████████████████</div>`;
+    document.getElementById('stage').appendChild(bossNameEl);
+
+    let zoomT = 0;
+    const zoomIv = setInterval(()=>{
+      zoomT += 0.016;
+      const prog = Math.min(zoomT/3.0, 1);
+      camera.position.lerp(new THREE.Vector3(cpu.x, 10, cpu.z+15), 0.08);
+      camera.lookAt(cpu.x, 3, cpu.z);
+      if(prog > 0.3) bossNameEl.style.opacity = '1';
+      if(prog >= 1){
+        clearInterval(zoomIv);
+        bossNameEl.style.opacity = '0';
+        setTimeout(()=>{ bossNameEl.remove(); heroActive=true; showCenterMessage('💀 フェーズ1: 四刀流！'); }, 600);
+      }
+    }, 16);
+    return;
   } else {
     // 通常: 敵CPU3体に減らす
     extraEnemies.forEach((ch,i)=>{ if(i<2){ ch.alive=true; if(ch.group) ch.group.visible=true; resetCharState(ch); } else { ch.alive=false; if(ch.group) ch.group.visible=false; } });
@@ -8167,12 +8217,87 @@ function updateHeroMode(dt){
     if(heroAreaTimer>=stage.goal) heroComplete(true);
 
   } else if(stage.type==='boss'){
-    // ボスのHPをcpu.hitsで追跡
     if(!cpu.alive || cpu.downed){
       heroComplete(true);
-    } else {
-      heroProgress = Math.floor((cpu.hits / cpu._bossHp)*100);
+      return;
     }
+
+    const hpRatio = 1 - (cpu.hits / cpu._bossMaxHp);
+    heroProgress = Math.floor((1-hpRatio)*100);
+
+    // フェーズ遷移チェック
+    const prevPhase = cpu._bossPhase;
+    if(hpRatio <= 0.33 && cpu._bossPhase < 3){
+      cpu._bossPhase = 3;
+    } else if(hpRatio <= 0.67 && cpu._bossPhase < 2){
+      cpu._bossPhase = 2;
+    }
+
+    // フェーズ変化時の演出
+    if(cpu._bossPhase !== prevPhase){
+      if(cpu._bossPhase === 2){
+        showCenterMessage('💣 フェーズ2: 爆撃モード！');
+        // 色を青に
+        cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0x0044ff); });
+        cpu.invuln = 2.0;
+      } else if(cpu._bossPhase === 3){
+        showCenterMessage('🔥 フェーズ3: 必殺技解放！');
+        // 色を赤に
+        cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xff0000); });
+        cpu.group.scale.set(3.0, 3.0, 3.0);
+        cpu.invuln = 2.0;
+      }
+    }
+
+    // フェーズ別AI
+    if(cpu._bossPhase === 1){
+      // フェーズ1: 距離に応じて武器切り替え
+      const dx=player.x-cpu.x, dz=player.z-cpu.z;
+      const dist=Math.sqrt(dx*dx+dz*dz);
+      if(dist > FIRE_RANGE*1.5) cpu.weapon='classic_sniper';
+      else if(dist > FIRE_RANGE*0.6) cpu.weapon='standard_shooter';
+      else if(dist > SWORD_RANGE*2) cpu.weapon='standard_parasol';
+      else cpu.weapon='classic_blade';
+      cpu.ultGauge=0; // フェーズ1は必殺技なし
+
+    } else if(cpu._bossPhase === 2){
+      // フェーズ2: スタンダードシューターで攻撃しながら全ボム投擲
+      cpu.weapon='standard_shooter';
+      cpu._bossThrowTimer -= dt;
+      if(cpu._bossThrowTimer <= 0){
+        // 全ボム種からランダムに投げる
+        const throwTypes = Object.keys(THROW_ITEM_DEF);
+        const picked = throwTypes[Math.floor(Math.random()*throwTypes.length)];
+        const target = new THREE.Vector3(player.x, 0, player.z);
+        throwItem(cpu, target, picked);
+        cpu._bossThrowTimer = 1.5; // 1.5秒ごと
+      }
+      cpu.ultGauge=0; // フェーズ2は必殺技なし
+
+    } else if(cpu._bossPhase === 3){
+      // フェーズ3: 全武器ローテーション+必殺技即使用
+      cpu._bossWeaponIdx = (cpu._bossWeaponIdx||0);
+      if(Math.random() < dt*0.5){
+        cpu._bossWeaponIdx = (cpu._bossWeaponIdx+1) % cpu._bossWeapons.length;
+        cpu.weapon = cpu._bossWeapons[cpu._bossWeaponIdx];
+      }
+      cpu.ultGauge = ULT_MAX; // 常にゲージ満タン
+      // フェーズ3ボム投擲も継続
+      cpu._bossThrowTimer -= dt;
+      if(cpu._bossThrowTimer <= 0){
+        const throwTypes = Object.keys(THROW_ITEM_DEF);
+        const picked = throwTypes[Math.floor(Math.random()*throwTypes.length)];
+        throwItem(cpu, new THREE.Vector3(player.x, 0, player.z), picked);
+        cpu._bossThrowTimer = 1.0;
+      }
+    }
+
+    // ボスHPゲージをHUDに表示
+    const hpBar = Math.max(0, Math.floor(hpRatio*20));
+    const hpFill = '█'.repeat(hpBar) + '░'.repeat(20-hpBar);
+    const phaseColor = cpu._bossPhase===1?'#ffdd00':cpu._bossPhase===2?'#4488ff':'#ff4400';
+    const el = document.getElementById('hero-hud');
+    if(el) el.innerHTML = `⚔️ STAGE 5 | <span style="color:${phaseColor}">フェーズ${cpu._bossPhase}/3</span> | HP: <span style="color:${phaseColor}">${hpFill}</span>`;
   }
 
   // 時間切れ
