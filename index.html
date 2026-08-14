@@ -324,6 +324,16 @@
   <!-- ヒーローモードHUD(バトル中に表示) -->
   <div id="hero-hud" style="display:none;position:absolute;top:60px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;font-size:13px;font-weight:700;padding:6px 20px;border-radius:8px;letter-spacing:2px;z-index:20;pointer-events:none;border:1px solid rgba(255,200,0,0.4);"></div>
 
+  <!-- ヒーローモード ステージ選択画面 -->
+  <div id="hero-stage-screen" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;background:#0a0c10;z-index:65;overflow-y:auto;">
+    <div style="max-width:600px;margin:0 auto;padding:30px 20px;text-align:center;">
+      <h2 style="color:#fff;font-size:22px;letter-spacing:3px;margin-bottom:6px;">⚔️ ヒーローモード</h2>
+      <p style="color:#666;font-size:11px;margin-bottom:24px;">ステージをクリアしてコインを稼ごう！</p>
+      <div id="hero-stage-list" style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px;"></div>
+      <button id="hero-back-btn" style="background:#333;color:#fff;border:none;border-radius:8px;padding:10px 30px;cursor:pointer;font-size:13px;">← 戻る</button>
+    </div>
+  </div>
+
   <!-- 商店街画面 -->
   <div id="shop-screen" style="display:none;position:absolute;top:0;left:0;width:100%;height:100%;background:#0a0c10;z-index:70;overflow-y:auto;">
     <div style="max-width:800px;margin:0 auto;padding:30px 20px;">
@@ -8186,24 +8196,10 @@ function updateHeroHUD(){
 /* ============================================================
    ヒーローモード ステージ選択画面
 ============================================================ */
-// ヒーローモードのステージ選択画面HTMLを追加(JS生成)
-(function(){
-  const div = document.createElement('div');
-  div.id = 'hero-stage-screen';
-  div.style.cssText = 'display:none;position:absolute;top:0;left:0;width:100%;height:100%;background:#0a0c10;z-index:65;overflow-y:auto;';
-  div.innerHTML = `
-    <div style="max-width:600px;margin:0 auto;padding:30px 20px;text-align:center;">
-      <h2 style="color:#fff;font-size:22px;letter-spacing:3px;margin-bottom:6px;">⚔️ ヒーローモード</h2>
-      <p style="color:#666;font-size:11px;margin-bottom:24px;">ステージをクリアしてコインを稼ごう！</p>
-      <div id="hero-stage-list" style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px;"></div>
-      <button id="hero-back-btn" style="background:#333;color:#fff;border:none;border-radius:8px;padding:10px 30px;cursor:pointer;font-size:13px;">← 戻る</button>
-    </div>`;
-  document.getElementById('stage').appendChild(div);
-  document.getElementById('hero-back-btn').addEventListener('click',()=>{
-    document.getElementById('hero-stage-screen').style.display='none';
-    openModeSelect();
-  });
-})();
+document.getElementById('hero-back-btn').addEventListener('click',()=>{
+  document.getElementById('hero-stage-screen').style.display='none';
+  openModeSelect();
+});
 
 function openHeroStageSelect(){
   const screen = document.getElementById('hero-stage-screen');
