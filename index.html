@@ -7542,7 +7542,10 @@ function resetGame(){
   player.group.rotation.y = player.yaw;
   cpu.group.position.set(cpu.x, 0, cpu.z);
   cpu.group.rotation.y = cpu.yaw;
-  // extraAllies/extraEnemiesの位置・向きは resetPositions 内で既に反映済み
+  // 武器ビジュアルを現在の選択武器で更新
+  player.weapon = selectedWeaponId;
+  updateWeaponVisual(player);
+  if(typeof applyGearMeshes === 'function') applyGearMeshes(player);
 }
 /* ============================================================
    メインループ
