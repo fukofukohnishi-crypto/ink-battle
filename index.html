@@ -8030,11 +8030,13 @@ document.getElementById('start-with-weapon').addEventListener('click', () => {
     characters.forEach(ch => { if(ch !== player) applyGearMeshes(ch); });
   }
 
-  if(pendingRestart){
+  if(pendingRestart || gameStarted){
+    // リスタートまたはヒーローモードでの再出撃
     pendingRestart = false;
     resetGame();
     if(typeof initCharCards === 'function') initCharCards();
-  } else if(!gameStarted){
+  } else {
+    // 初回起動
     gameStarted = true;
     document.getElementById('loading').style.display = 'none';
     if(typeof initBattleMode === 'function') initBattleMode();
