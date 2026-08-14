@@ -8075,15 +8075,15 @@ function initHeroMode(){
   // 敵チームをリセット・配置
   const stageType = heroStage.type;
   if(stageType === 'salmon'){
-    // サモランと同じシャケ生成
+    // ヒーロー専用: サモランWAVEシステムを使わず直接スポーン管理
     extraEnemies.forEach(ch=>{ ch.alive=false; if(ch.group) ch.group.visible=false; });
     cpu.alive=false; if(cpu.group) cpu.group.visible=false;
     salmonEntities.forEach(s=>{ if(s.group) scene.remove(s.group); });
     salmonEntities=[];
-    salmonWave=1; salmonActive=true; salmonWaveComplete=false;
+    salmonWave=1; salmonActive=false; // WAVEシステムは無効化
     salmonSpawnTimer=1.0;
-    const count=heroStage.goal;
-    salmonRemaining=count; salmonSpawned=0;
+    salmonSpawned=0; salmonRemaining=heroStage.goal;
+    showCenterMessage(`🌊 シャケ${heroStage.goal}体を倒せ！`);
   } else if(stageType === 'boss'){
     // ボス: cpu1体を超強化
     extraEnemies.forEach(ch=>{ ch.alive=false; if(ch.group) ch.group.visible=false; });
@@ -8126,14 +8126,29 @@ function updateHeroMode(dt){
   } else if(stage.type==='salmon'){
     const alive = salmonEntities.filter(s=>s.alive).length;
     const total = stage.goal;
-    const killed = Math.min(salmonSpawned - alive, total);
-    heroProgress = Math.max(0,killed);
-    // シャケをgoal体だけ出す
+    const killed = Math.max(0, salmonSpawned - alive);
+    heroProgress = Math.min(killed, total);
+    // シャケをgoal体だけスポーン
     if(salmonSpawned < total){
-      salmonSpawnTimer-=dt;
-      if(salmonSpawnTimer<=0){ spawnSalmonEntity(); salmonSpawnTimer=1.5; }
+      salmonSpawnTimer -= dt;
+      if(salmonSpawnTimer <= 0){
+        spawnSalmonEntity();
+        salmonSpawnTimer = 1.5;
+      }
     }
-    if(salmonSpawned>=total && alive===0) heroComplete(true);
+    // シャケのAI更新(updateSalmonはsalmon以外のモードでreturnするので直接呼ぶ)
+    salmonEntities.forEach(s => updateSalmonEntity(s, dt));
+    // やられ判定
+    salmonEntities.forEach(s => {
+      if(s.alive && s.hits >= s._maxHits){
+        s.alive = false;
+        scene.remove(s.group);
+        spawnBombFlash(s.x, 0.5, s.z, 0xff4400);
+        addFloorSplat(s.x, s.z, BIG_SPLAT_R*1.5, 'yellow', 0);
+        player.ultGauge = Math.min(ULT_MAX, player.ultGauge + 8);
+      }
+    });
+    if(salmonSpawned >= total && alive === 0) heroComplete(true);
 
   } else if(stage.type==='area'){
     const areaR = AREA_RADIUS * STAGE_POS_SCALE;
