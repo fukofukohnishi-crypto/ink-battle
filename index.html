@@ -334,6 +334,9 @@
         <button class="wtab active" data-shop="weapon">⚔️ 武器</button>
         <button class="wtab" data-shop="ult">💥 必殺技</button>
         <button class="wtab" data-shop="throw">💣 投擲</button>
+        <button class="wtab" data-shop="tops">👕 服</button>
+        <button class="wtab" data-shop="bottoms">👖 ズボン</button>
+        <button class="wtab" data-shop="shoes">👟 靴</button>
       </div>
       <div id="shop-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-bottom:30px;"></div>
       <div style="text-align:center;">
@@ -7564,15 +7567,8 @@ function buildUltGrid(){
   grid.innerHTML = '';
   ULT_TYPES.forEach(id => {
     const u = ULT_DEF[id];
-    const owned = typeof isOwned==='function' ? isOwned('ult', id) : true;
     const card = document.createElement('div');
     card.className = 'weapon-card' + (id === selectedUltType ? ' selected' : '');
-    if(!owned) card.style.opacity='0.4';
-    if(!owned){
-      const shopItem = (SHOP_ITEMS.ult||[]).find(s=>s.id===id);
-      card.innerHTML=`<div class="wc-name">🔒 ${u.icon} ${u.name}</div><div class="wc-desc" style="color:#888;">商店街で解放 🪙${shopItem?shopItem.price:'?'}</div>`;
-      grid.appendChild(card); return;
-    }
     card.innerHTML = `<div class="wc-name">${u.icon} ${u.name}</div><div class="wc-desc">${u.desc}</div>`;
     card.onclick = () => {
       selectedUltType = id;
@@ -7635,19 +7631,9 @@ function showWeaponTab(cat){
   const ids = Object.keys(WEAPON_DB).filter(k => WEAPON_DB[k].category === cat);
   ids.forEach(id => {
     const w = WEAPON_DB[id];
-    const owned = typeof isOwned==='function' ? isOwned('weapon', id) : true;
     const card = document.createElement('div');
     card.className = 'weapon-card' + (id === selectedWeaponId ? ' selected' : '');
-    if(!owned) card.style.opacity='0.4';
     card.dataset.id = id;
-
-    if(!owned){
-      // 未解放: ロック表示のみ
-      const shopItem = (SHOP_ITEMS.weapon||[]).find(s=>s.id===id);
-      card.innerHTML = `<div class="wc-name">🔒 ${w.name}</div><div class="wc-desc" style="color:#888;">商店街で解放 🪙${shopItem?shopItem.price:'?'}</div>`;
-      grid.appendChild(card);
-      return;
-    }
 
     // パラメータをバー表示(0〜2.0のスケールを100%に正規化)
     const barData = cat === 'parasol' ? [
@@ -7702,8 +7688,15 @@ function addCoins(n){ setCoins(getCoins()+n); }
 function getOwned(cat){ return JSON.parse(localStorage.getItem('inkbattle_owned_'+cat)||'[]'); }
 function setOwned(cat,arr){ localStorage.setItem('inkbattle_owned_'+cat, JSON.stringify(arr)); }
 function isOwned(cat,id){
+  // 商店街で購入済みか、または無料アイテムかを確認
+  // ※ localStorage未対応ブラウザ対策: 無料アイテムは常に解放
   const free = SHOP_FREE[cat]||[];
-  return free.includes(id) || getOwned(cat).includes(id);
+  if(free.includes(id)) return true;
+  try {
+    return getOwned(cat).includes(id);
+  } catch(e) {
+    return false;
+  }
 }
 function buyItem(cat,id,price){
   if(isOwned(cat,id)) return false;
@@ -7798,6 +7791,9 @@ const SHOP_ITEMS = {
     {id:'heal_balloon', name:'ヒールバルーン',     price:25, icon:'💚'},
     {id:'smoke_bomb',   name:'スモークボム',       price:15, icon:'💨'},
   ],
+  tops: Object.entries(GEAR_DEF.tops).map(([id,def])=>({id, name:def.name, price:12, icon:'👕', desc:def.desc})),
+  bottoms: Object.entries(GEAR_DEF.bottoms).map(([id,def])=>({id, name:def.name, price:12, icon:'👖', desc:def.desc})),
+  shoes: Object.entries(GEAR_DEF.shoes).map(([id,def])=>({id, name:def.name, price:12, icon:'👟', desc:def.desc})),
 };
 
 let shopTab = 'weapon';
@@ -7833,30 +7829,58 @@ function buildShopGrid(){
   items.forEach(item=>{
     const owned = isOwned(shopTab, item.id);
     const canBuy = !owned && coins>=item.price;
-    const def = shopTab==='weapon' ? WEAPON_DB[item.id]
+    // desc取得(服カテゴリはitemから直接)
+    const isGear = ['tops','bottoms','shoes'].includes(shopTab);
+    const def = isGear ? null
+      : shopTab==='weapon' ? WEAPON_DB[item.id]
       : shopTab==='ult' ? ULT_DEF[item.id]
       : THROW_ITEM_DEF[item.id];
-    const desc = def ? (def.desc||'') : '';
+    const desc = item.desc || (def ? (def.desc||'') : '');
+
+    // 装備中チェック(服カテゴリのみ)
+    const slotMap = {tops:'top', bottoms:'bottom', shoes:'shoe'};
+    const slot = slotMap[shopTab];
+    const isEquipped = isGear && slot && typeof selectedGear!=='undefined' && selectedGear[shopTab]===item.id;
+
+    // 色スウォッチ(服カテゴリのみ)
+    const gearDef = isGear ? (GEAR_DEF[shopTab]||{})[item.id] : null;
+    const swatch = gearDef
+      ? `<span style="display:inline-block;width:14px;height:14px;background:#${gearDef.color.toString(16).padStart(6,'0')};border:2px solid #${gearDef.trimColor.toString(16).padStart(6,'0')};border-radius:2px;margin-right:5px;vertical-align:middle;"></span>`
+      : '';
+
     const card = document.createElement('div');
-    card.className = 'weapon-card' + (owned?' selected':'');
+    card.className = 'weapon-card' + (owned?' selected':'') + (isEquipped?' selected':'');
     card.style.opacity = (!owned && !canBuy) ? '0.5' : '1';
     card.innerHTML = `
-      <div class="wc-name">${item.icon} ${item.name}</div>
+      <div class="wc-name">${swatch}${item.icon} ${item.name}${isEquipped?' <span style="color:#4f8;font-size:10px;">装備中</span>':''}</div>
       <div class="wc-desc" style="font-size:10px;margin-bottom:8px;">${desc}</div>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
         ${owned
-          ? '<span style="color:#4f8;font-weight:900;font-size:12px;">✅ 解放済み</span>'
+          ? `<span style="color:#4f8;font-weight:900;font-size:12px;">✅ 解放済み</span>`
           : `<span style="color:#f4d000;font-weight:900;">🪙 ${item.price===0?'無料':item.price}</span>`
         }
-        ${!owned ? `<button style="background:${canBuy?'#f4d000':'#444'};color:#000;border:none;border-radius:6px;padding:4px 12px;font-weight:900;cursor:${canBuy?'pointer':'default'};font-size:12px;" ${canBuy?'':'disabled'} data-id="${item.id}" data-cat="${shopTab}" data-price="${item.price}">購入</button>` : ''}
+        <div style="display:flex;gap:6px;">
+          ${!owned ? `<button style="background:${canBuy?'#f4d000':'#444'};color:#000;border:none;border-radius:6px;padding:4px 10px;font-weight:900;cursor:${canBuy?'pointer':'default'};font-size:12px;" ${canBuy?'':'disabled'} data-id="${item.id}" data-cat="${shopTab}" data-price="${item.price}">購入</button>` : ''}
+          ${owned && isGear ? `<button style="background:${isEquipped?'#44aa44':'#4488ff'};color:#fff;border:none;border-radius:6px;padding:4px 10px;font-weight:900;cursor:pointer;font-size:12px;" data-equip="${item.id}" data-equip-cat="${shopTab}">${isEquipped?'外す':'装備'}</button>` : ''}
+        </div>
       </div>`;
-    // 購入ボタンのイベント
+    // 購入ボタン
     const btn = card.querySelector('button[data-id]');
     if(btn) btn.onclick = ()=>{
       if(buyItem(btn.dataset.cat, btn.dataset.id, parseInt(btn.dataset.price))){
-        buildShopGrid();
-        updateShopCoinDisplay();
+        buildShopGrid(); updateShopCoinDisplay();
       }
+    };
+    // 装備ボタン
+    const eqBtn = card.querySelector('button[data-equip]');
+    if(eqBtn) eqBtn.onclick = ()=>{
+      const cat = eqBtn.dataset.equipCat;
+      if(isEquipped){
+        selectedGear[cat] = null;
+      } else {
+        selectedGear[cat] = eqBtn.dataset.equip;
+      }
+      buildShopGrid();
     };
     grid.appendChild(card);
   });
@@ -7923,15 +7947,8 @@ function buildThrowGrid(){
   if(!grid) return;
   grid.innerHTML = '';
   Object.entries(THROW_ITEM_DEF).forEach(([id, def]) => {
-    const owned = typeof isOwned==='function' ? isOwned('throw', id) : true;
     const card = document.createElement('div');
     card.className = 'weapon-card' + (id === selectedThrowItem ? ' selected' : '');
-    if(!owned) card.style.opacity='0.4';
-    if(!owned){
-      const shopItem = (SHOP_ITEMS.throw||[]).find(s=>s.id===id);
-      card.innerHTML=`<div class="wc-name">🔒 ${def.icon} ${def.name}</div><div class="wc-desc" style="color:#888;">商店街で解放 🪙${shopItem?shopItem.price:'?'}</div>`;
-      grid.appendChild(card); return;
-    }
     card.innerHTML = `<div class="wc-name">${def.icon} ${def.name}</div><div class="wc-desc">${def.desc}</div>`;
     card.onclick = () => {
       selectedThrowItem = id;
