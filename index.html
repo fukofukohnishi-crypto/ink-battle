@@ -3100,7 +3100,13 @@ function throwItem(shooter, targetPoint, itemId){
   const def = THROW_ITEM_DEF[itemId] || THROW_ITEM_DEF.ink_bomb;
   currentPainter = shooter;
   const chestWorld = new THREE.Vector3();
-  shooter.group.userData.parts.chest.getWorldPosition(chestWorld);
+  const parts = shooter.group && shooter.group.userData && shooter.group.userData.parts;
+  if(parts && parts.chest){
+    parts.chest.getWorldPosition(chestWorld);
+  } else {
+    // partsがない場合はキャラ座標から推定
+    chestWorld.set(shooter.x, 1.2, shooter.z);
+  }
 
   const dx = targetPoint.x - chestWorld.x, dz = targetPoint.z - chestWorld.z;
   const horizDist = Math.sqrt(dx*dx+dz*dz)||0.001;
@@ -5477,21 +5483,25 @@ function activateUlt(){
   } else if(player.ultType === 'meteor'){
     showCenterMessage('☄️ 隕石落下！');
     player.ultActive = false;
-    // 全敵に隕石落下(1秒後に順番に落下)
     const enemies = characters.filter(c=>c.team!==player.team&&c.alive&&!c.downed);
     // シャケにも隕石
     salmonEntities.filter(s=>s.alive).forEach((s,i)=>{
-      setTimeout(()=>{ if(!s.alive)return; spawnBombFlash(s.x,3.0,s.z,0xff4400); setTimeout(()=>{ s.hits+=99; addFloorSplat(s.x,s.z,BOMB_SPLAT_R*1.5,'yellow',s.groundY||0); },400); },i*200);
+      setTimeout(()=>{
+        if(!s.alive) return;
+        spawnMeteorEffect(s.x, s.z, ()=>{
+          s.hits+=99;
+          addFloorSplat(s.x, s.z, BOMB_SPLAT_R*1.5, 'yellow', s.groundY||0);
+        });
+      }, i*200);
     });
     enemies.forEach((ch, i) => {
       setTimeout(() => {
         if(!ch.alive||ch.downed) return;
-        spawnBombFlash(ch.x, 3.0, ch.z, 0xff4400);
-        setTimeout(()=>{
+        spawnMeteorEffect(ch.x, ch.z, ()=>{
           applyDamage(ch, HITS_PER_LIFE, player);
           flashCharacter(ch);
           addFloorSplat(ch.x, ch.z, BOMB_SPLAT_R*1.5, player.colorName, ch.groundY||0);
-        }, 400);
+        });
       }, i*200);
     });
 
@@ -6553,9 +6563,83 @@ function nearestOwnFloorSplat(x, z, colorName, groundY){
 
 // CPUが攻撃モードのときに、装備している武器に応じてプレイヤーへ攻撃する処理をまとめる
 // CPU必殺技の発動処理
+/* ============================================================
+   隕石落下エフェクト / CPU必殺技テキスト
+============================================================ */
+function spawnMeteorEffect(tx, tz, onImpact){
+  // 上空から球体が落ちてくるアニメーション
+  const geo = new THREE.SphereGeometry(1.5, 10, 8);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 1.2,
+    roughness: 0.4
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  const startY = 60;
+  mesh.position.set(tx, startY, tz);
+  scene.add(mesh);
+
+  const startTime = performance.now();
+  const duration = 600; // 0.6秒で落下
+
+  const drop = () => {
+    const elapsed = performance.now() - startTime;
+    const t = Math.min(elapsed / duration, 1);
+    mesh.position.y = startY * (1 - t);
+    mesh.material.emissiveIntensity = 1.2 + t * 2;
+
+    if(t < 1){
+      requestAnimationFrame(drop);
+    } else {
+      scene.remove(mesh);
+      spawnBombFlash(tx, 0.5, tz, 0xff4400);
+      if(onImpact) onImpact();
+    }
+  };
+  requestAnimationFrame(drop);
+}
+
+let _bossUltMsgTimer = null;
+function showBossUltMessage(title, subtitle){
+  // 既存のメッセージを削除
+  const old = document.getElementById('boss-ult-msg');
+  if(old) old.remove();
+  if(_bossUltMsgTimer) clearTimeout(_bossUltMsgTimer);
+
+  const el = document.createElement('div');
+  el.id = 'boss-ult-msg';
+  el.style.cssText = `
+    position:absolute;top:40%;left:50%;transform:translate(-50%,-50%);
+    text-align:center;z-index:40;pointer-events:none;
+    animation:bossUltIn 0.3s ease-out;`;
+  el.innerHTML = `
+    <div style="color:#ff4400;font-size:18px;font-weight:900;letter-spacing:3px;
+      text-shadow:0 0 20px #ff0000;margin-bottom:8px;">${title}</div>
+    <div style="color:#ffdd00;font-size:26px;font-weight:900;letter-spacing:2px;
+      text-shadow:0 0 30px #ff8800;">${subtitle}</div>`;
+  document.getElementById('stage').appendChild(el);
+
+  _bossUltMsgTimer = setTimeout(()=>{
+    if(el.parentNode) el.style.opacity='0';
+    setTimeout(()=>{ if(el.parentNode) el.remove(); }, 400);
+  }, 2000);
+}
+
+// CSS アニメーション追加
+(()=>{
+  const s = document.createElement('style');
+  s.textContent = `@keyframes bossUltIn{from{opacity:0;transform:translate(-50%,-50%) scale(0.5);}to{opacity:1;transform:translate(-50%,-50%) scale(1);}}`;
+  document.head.appendChild(s);
+})();
+
 function activateCpuUlt(self, target){
   self.ultGauge = 0;
   self.ultActive = true;
+
+  // ボスまたはCPU必殺技発動テキスト表示
+  const ultName = ULT_DEF[self.ultType]?.name || self.ultType;
+  const isBoss = self === cpu && self._bossPhase;
+  const prefix = isBoss ? 'ボスが必殺技発動！' : '敵が必殺技発動！';
+  showBossUltMessage(prefix, `${ULT_DEF[self.ultType]?.icon||'💥'} ${ultName}`);
 
   if(self.ultType === 'dash'){
     // 突進: ターゲットに即突進(CPUはロックオン待機なし)
