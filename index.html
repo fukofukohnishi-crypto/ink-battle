@@ -625,6 +625,14 @@ const WEAPON_DB = {
     projectileCount: 1, spreadAngle: 0,
     color: 0xff4444
   },
+  // ===== ヒーローモード専用武器 =====
+  railgun: {
+    name: 'オール・ザ・レールガン', category: 'shooter', baseType: 'gun',
+    label: '⚡', desc: '【ヒーローモード専用】グレートソード横振り半分のダメージ・ロングレンジ射程・フルオートSMG連射力・インク2倍回復・40%%スタン付与。',
+    fireCooldown: 0.28, inkCost: -2.0, range: 7.0, damage: 1.39,
+    projectileCount: 1, spreadAngle: 0, stunChance: 0.4, stunTime: 3.0,
+    heroOnly: true, color: 0x00ffff
+  },
   long_range_shooter: {
     name: 'ロングレンジシューター', category: 'shooter', baseType: 'gun',
     label: '🔫', desc: '超長射程の連射銃。遠距離から塗り続けられる。',
@@ -4781,8 +4789,8 @@ function applyDamage(ch, amount, attacker){
     ? getGearEffect(ch,'invulnMore',0) : 0;
   ch.invuln = 0.25 + invulnBonus;
   let dmg = (amount||1);
-  // ボスへのダメージは1回最大0.05(100分の5)に制限
-  if(ch === cpu && ch._bossMaxHp) dmg = Math.min(dmg, 0.05);
+  // ボスへのダメージは1回最大5に制限(HP100の100分の5)
+  if(ch === cpu && ch._bossMaxHp) dmg = Math.min(dmg, 5);
   const actualAmount = (ch.tonicTimer > 0) ? dmg / TONIC_TOUGHNESS_MULT : dmg;
   ch.hits += actualAmount;
   // ボス専用HP判定(通常のHITS_PER_LIFEとは別に管理)
@@ -6246,15 +6254,26 @@ function handlePlayerWeaponInput(dt){
     const fireFastMult = hasGearEffect(player,'fireFast') ? getGearEffect(player,'fireFast',1.0) : 1.0;
     const cooldown = FIRE_COOLDOWN * (wDef.fireCooldown || 1.0) * fireFastMult;
     const ecoMult = hasGearEffect(player,'ecoSole') ? getGearEffect(player,'ecoSole',1.0) : 1.0;
-    const cost = INK_COST * (wDef.inkCost || 1.0) * ecoMult;
+    const rawCost = INK_COST * (wDef.inkCost || 1.0) * ecoMult;
+    // レールガン: inkCostが負=インク回復。常に発射可能
+    const cost = rawCost < 0 ? 0 : rawCost;
     if(spaceDown && !player.diving && player.fireTimer <= 0 && player.ink >= cost){
       player.fireTimer = cooldown;
-      player.ink -= cost;
+      player.ink = Math.min(MAX_INK, player.ink - rawCost); // 負ならインク回復
       const ndcX = (mouseX/window.innerWidth)*2 - 1;
       const ndcY = -(mouseY/window.innerHeight)*2 + 1;
       mouseRaycaster.setFromCamera({x:ndcX, y:ndcY}, camera);
       const baseTarget = raycastAimTarget(mouseRaycaster.ray.origin, mouseRaycaster.ray.direction);
       fireWeaponProjectiles(player, baseTarget, wDef);
+      // レールガン: 40%スタン付与
+      if(wDef.stunChance && Math.random() < wDef.stunChance){
+        characters.forEach(ch=>{
+          if(ch.team===player.team||!ch.alive||ch.downed) return;
+          const dx=ch.x-baseTarget.x, dz=ch.z-baseTarget.z;
+          if(dx*dx+dz*dz < 4*4) ch._stunTimer = wDef.stunTime||3.0;
+        });
+        if(cpu._bossMaxHp) cpu._stunTimer = Math.max(cpu._stunTimer||0, wDef.stunTime||3.0);
+      }
       document.getElementById('crosshair').classList.add('fire');
       setTimeout(() => document.getElementById('crosshair').classList.remove('fire'), 80);
     }
@@ -8188,7 +8207,11 @@ function initHeroMode(){
     resetCharState(cpu);
     cpu.alive=true; if(cpu.group) cpu.group.visible=true;
     cpu.hits=0;
-    cpu._bossMaxHp  = 3; // 0.05ダメ×60発=3(100分の5×60発)
+    // プレイヤーにレールガンを強制装備
+    player.weapon = 'railgun';
+    updateWeaponVisual(player);
+    showCenterMessage('⚡ オール・ザ・レールガン装備！');
+    cpu._bossMaxHp  = 100; // HP100×3段階
     cpu._bossHp     = cpu._bossMaxHp;
     cpu._bossPhase  = 1;
     cpu.tonicTimer  = 99999;
@@ -8305,6 +8328,23 @@ function updateHeroMode(dt){
 
   } else if(stage.type==='boss'){
     if(!cpu.alive || cpu.downed){
+      if(cpu._bossPhase < 3){
+        // 次形態へ
+        cpu._bossPhase++;
+        cpu.alive = true; cpu.downed = false;
+        cpu.hits = 0;
+        cpu.invuln = 2.0;
+        if(cpu._bossPhase === 2){
+          showBossUltMessage('💙 第二形態！', 'フェーズ2: 爆撃モード');
+          cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0x0044ff); });
+        } else if(cpu._bossPhase === 3){
+          showBossUltMessage('🔥 第三形態！', 'フェーズ3: 必殺技解放');
+          cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xff0000); });
+          cpu.group.scale.set(3.0, 3.0, 3.0);
+        }
+        return;
+      }
+      // 全形態撃破
       if(cpu._bossRadar){ scene.remove(cpu._bossRadar); cpu._bossRadar=null; }
       heroComplete(true);
       return;
@@ -8367,28 +8407,8 @@ function updateHeroMode(dt){
     cpu._bossRadar.visible = true;
 
     const hpRatio = 1 - (cpu.hits / cpu._bossMaxHp);
-    heroProgress = Math.floor((1-hpRatio)*100);
+    heroProgress = cpu._bossPhase*33 + Math.floor((1-hpRatio)*33);
 
-    const prevPhase = cpu._bossPhase;
-    if(hpRatio <= 0.33 && cpu._bossPhase < 3){
-      cpu._bossPhase = 3;
-    } else if(hpRatio <= 0.67 && cpu._bossPhase < 2){
-      cpu._bossPhase = 2;
-    }
-
-    // フェーズ変化時の演出
-    if(cpu._bossPhase !== prevPhase){
-      if(cpu._bossPhase === 2){
-        showBossUltMessage('💙 第二形態！', 'フェーズ2: 爆撃モード');
-        cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0x0044ff); });
-        cpu.invuln = 2.0;
-      } else if(cpu._bossPhase === 3){
-        showBossUltMessage('🔥 第三形態！', 'フェーズ3: 必殺技解放');
-        cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xff0000); });
-        cpu.group.scale.set(3.0, 3.0, 3.0);
-        cpu.invuln = 2.0;
-      }
-    }
 
     // フェーズ別AI
     if(cpu._bossPhase === 1){
