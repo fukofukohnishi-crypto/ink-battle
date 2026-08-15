@@ -8188,7 +8188,7 @@ function initHeroMode(){
     resetCharState(cpu);
     cpu.alive=true; if(cpu.group) cpu.group.visible=true;
     cpu.hits=0;
-    cpu._bossMaxHp  = HITS_PER_LIFE * 30; // 30倍HP(3段階分)
+    cpu._bossMaxHp  = 300; // 5ダメ×60発=300
     cpu._bossHp     = cpu._bossMaxHp;
     cpu._bossPhase  = 1;
     cpu.tonicTimer  = 99999;
@@ -8380,13 +8380,11 @@ function updateHeroMode(dt){
     // フェーズ変化時の演出
     if(cpu._bossPhase !== prevPhase){
       if(cpu._bossPhase === 2){
-        showCenterMessage('💣 フェーズ2: 爆撃モード！');
-        // 色を青に
+        showBossUltMessage('💙 第二形態！', 'フェーズ2: 爆撃モード');
         cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0x0044ff); });
         cpu.invuln = 2.0;
       } else if(cpu._bossPhase === 3){
-        showCenterMessage('🔥 フェーズ3: 必殺技解放！');
-        // 色を赤に
+        showBossUltMessage('🔥 第三形態！', 'フェーズ3: 必殺技解放');
         cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xff0000); });
         cpu.group.scale.set(3.0, 3.0, 3.0);
         cpu.invuln = 2.0;
