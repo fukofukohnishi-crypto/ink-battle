@@ -5604,40 +5604,76 @@ function activateUlt(){
   } else if(player.ultType === 'ally_salmon'){
     showCenterMessage('🐟 味方シャケ召喚！');
     player.ultActive = false;
-    // 味方シャケ5体を召喚(20秒間プレイヤーの周囲を守る)
-    for(let i = 0; i < 5; i++){
-      const ang = (i/5)*Math.PI*2;
-      const sx = player.x + Math.cos(ang)*3;
-      const sz = player.z + Math.sin(ang)*3;
-      // 味方シャケとして生成(team='ally'・colorName='yellow')
-      const s = spawnAllySalmon(sx, sz);
-      if(s){
-        s._allyLifeTimer = 20.0; // 20秒後に消滅
-        s.team = 'ally';
-        s.colorName = 'yellow';
-        // 色を黄色に
-        s.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xffdd00); });
-      }
+    player.ultGauge = 0;
+    for(let i=0;i<5;i++){
+      const ang=(i/5)*Math.PI*2;
+      spawnAllySalmon(player.x+Math.cos(ang)*3, player.z+Math.sin(ang)*3);
     }
   }
 }
 
-// 味方シャケ召喚用: salmonEntityを味方として生成
+// 味方シャケ召喚: salmonEntitiesとは独立したリストで管理
+let allySalmonEntities = [];
+
 function spawnAllySalmon(sx, sz){
-  salmonWave = salmonWave || 1;
-  const prev = salmonWave;
-  salmonWave = 1; // WAVE1相当の強さ
-  // 元のspawnSalmonEntityを呼んで後から属性変更
-  const prevLen = salmonEntities.length;
-  spawnSalmonEntity();
-  salmonWave = prev;
-  if(salmonEntities.length > prevLen){
-    const s = salmonEntities[salmonEntities.length-1];
-    s.x = sx; s.z = sz;
-    s.group.position.set(sx, 0, sz);
-    return s;
+  const group = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({color:0xffdd00, roughness:0.7});
+  const dark = new THREE.MeshStandardMaterial({color:0xcc9900, roughness:0.8});
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.6,0.3), mat);
+  torso.position.y=1.0; group.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22,10,8), mat);
+  head.position.y=1.72; group.add(head);
+  [-0.38,0.38].forEach(x=>{
+    const arm=new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.10,0.55,8),mat);
+    arm.position.set(x,1.05,0); group.add(arm);
+  });
+  [-0.16,0.16].forEach(x=>{
+    const leg=new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.14,0.85,8),dark);
+    leg.position.set(x,0.42,0); group.add(leg);
+  });
+  group.position.set(sx,0,sz);
+  scene.add(group);
+  const s = {
+    group, x:sx, z:sz, yaw:0, alive:true,
+    team:'ally', colorName:'yellow',
+    hits:0, _maxHits:3.0,
+    _stunTimer:0, _allyLifeTimer:20.0,
+    fireTimer:0, invuln:0, groundY:0
+  };
+  allySalmonEntities.push(s);
+  return s;
+}
+
+function updateAllySalmons(dt){
+  for(let i=allySalmonEntities.length-1;i>=0;i--){
+    const s = allySalmonEntities[i];
+    if(!s.alive){ scene.remove(s.group); allySalmonEntities.splice(i,1); continue; }
+    s._allyLifeTimer -= dt;
+    if(s._allyLifeTimer <= 0){ scene.remove(s.group); allySalmonEntities.splice(i,1); continue; }
+    if(s._stunTimer > 0){ s._stunTimer -= dt; continue; }
+    // 敵を攻撃
+    const targets = characters.filter(c=>c.team==='enemy'&&c.alive&&!c.downed);
+    if(cpu._bossMaxHp&&cpu.alive&&!cpu.downed) targets.push(cpu);
+    if(targets.length===0) continue;
+    let nearest=targets[0], nearDist=Infinity;
+    targets.forEach(ch=>{
+      const dx=ch.x-s.x, dz=ch.z-s.z, d=dx*dx+dz*dz;
+      if(d<nearDist){nearDist=d;nearest=ch;}
+    });
+    const dist=Math.sqrt(nearDist)||0.001;
+    const dx=(nearest.x-s.x)/dist, dz=(nearest.z-s.z)/dist;
+    s.yaw=Math.atan2(dx,dz);
+    s.x+=dx*BASE_SPEED*0.9*dt; s.z+=dz*BASE_SPEED*0.9*dt;
+    s.group.position.set(s.x,0,s.z);
+    s.group.rotation.y=s.yaw;
+    s.fireTimer-=dt;
+    if(dist<3.5&&s.fireTimer<=0){
+      s.fireTimer=0.8;
+      applyDamage(nearest,HITS_PER_LIFE*0.25,null);
+      flashCharacter(nearest);
+      addFloorSplat(nearest.x,nearest.z,BIG_SPLAT_R*0.7,'yellow',0);
+    }
   }
-  return null;
 }
 
 // ===== 新必殺技の更新処理 =====
@@ -7747,6 +7783,7 @@ function animate(){
     if(typeof updateBattleMode === 'function') updateBattleMode(dt);
     if(typeof updateSalmon === 'function') updateSalmon(dt);
     if(typeof updateHeroMode === 'function') updateHeroMode(dt);
+    if(typeof updateAllySalmons === 'function') updateAllySalmons(dt);
     if(typeof checkHokoBarrierHit === 'function') checkHokoBarrierHit();
     if(typeof updateParasols === 'function') updateParasols(dt);
     // 新必殺技の更新
