@@ -951,8 +951,9 @@ const ULT_GAIN_PER_AREA = 2.6;      // 自分が新しく塗った床面積1平�
 const ULT_TYPES = [
   'dash','beam','shield','tonic','ground_punch',
   'mega_laser','ink_tsunami','time_stop','clone','meteor',
-  'ink_absorb','barrier_fort','turbo_jet','sniper_mode','ink_volcano'
-]; // 15種類
+  'ink_absorb','barrier_fort','turbo_jet','sniper_mode','ink_volcano',
+  'ally_salmon'
+]; // 16種類
 
 // 必殺技の表示情報
 const ULT_DEF = {
@@ -971,7 +972,10 @@ const ULT_DEF = {
   turbo_jet:    { name:'ターボジェット',   icon:'🚀',  desc:'10秒間移動速度5倍＋ジャンプ3倍。空を飛ぶように動ける。' },
   sniper_mode:  { name:'スナイパーモード', icon:'🎯',  desc:'15秒間、クリック先を即キルできる超精密狙撃モード。' },
   ink_volcano:  { name:'インクボルケーノ', icon:'🌋',  desc:'足元から火山のようにインクが噴出し周囲を塗り広げる。' },
+  ally_salmon:  { name:'味方シャケ召喚',   icon:'🐟',  desc:'味方として戦うシャケを5体召喚！20秒間プレイヤーの周囲を守る。' },
 };
+
+// 必殺技の表示情報
 const DASH_RANGE = 6.0;             // 突進の移動距離(元2m×3倍)
 const DASH_LOCKON_WAIT = 5.0;       // 突進前のロックオン待機時間(秒)
 const DASH_DURATION = 0.5;          // 0.5秒で到達
@@ -2533,18 +2537,32 @@ function spawnSalmonEntity(){
 
 function updateSalmonEntity(s, dt){
   if(!s.alive || s.downed) return;
-  // スタン中は動かない
   if(s._stunTimer > 0){ s._stunTimer -= dt; return; }
 
-  // 最も近い味方プレイヤーをターゲット
-  const allyTeam = [player, ...extraAllies].filter(c=>c.alive&&!c.downed);
-  if(allyTeam.length === 0) return;
+  // ライフタイマー(味方シャケ召喚の場合)
+  if(s._allyLifeTimer !== undefined){
+    s._allyLifeTimer -= dt;
+    if(s._allyLifeTimer <= 0){
+      s.alive = false; scene.remove(s.group); return;
+    }
+  }
 
-  let nearest = allyTeam[0];
+  const isAlly = s.team === 'ally';
+  // ターゲット選択: 味方シャケは敵キャラ・ボスを攻撃
+  let targetList;
+  if(isAlly){
+    targetList = characters.filter(c=>c.team==='enemy'&&c.alive&&!c.downed);
+    if(cpu._bossMaxHp&&cpu.alive&&!cpu.downed) targetList.push(cpu);
+  } else {
+    targetList = [player,...extraAllies].filter(c=>c.alive&&!c.downed);
+  }
+  if(targetList.length === 0) return;
+
+  let nearest = targetList[0];
   let nearDist = Infinity;
-  allyTeam.forEach(ch=>{
+  targetList.forEach(ch=>{
     const dx=ch.x-s.x, dz=ch.z-s.z;
-    const d = dx*dx+dz*dz;
+    const d=dx*dx+dz*dz;
     if(d<nearDist){ nearDist=d; nearest=ch; }
   });
   const dist = Math.sqrt(nearDist);
@@ -5582,7 +5600,44 @@ function activateUlt(){
       requestAnimationFrame(doVolcano);
     };
     requestAnimationFrame(doVolcano);
+
+  } else if(player.ultType === 'ally_salmon'){
+    showCenterMessage('🐟 味方シャケ召喚！');
+    player.ultActive = false;
+    // 味方シャケ5体を召喚(20秒間プレイヤーの周囲を守る)
+    for(let i = 0; i < 5; i++){
+      const ang = (i/5)*Math.PI*2;
+      const sx = player.x + Math.cos(ang)*3;
+      const sz = player.z + Math.sin(ang)*3;
+      // 味方シャケとして生成(team='ally'・colorName='yellow')
+      const s = spawnAllySalmon(sx, sz);
+      if(s){
+        s._allyLifeTimer = 20.0; // 20秒後に消滅
+        s.team = 'ally';
+        s.colorName = 'yellow';
+        // 色を黄色に
+        s.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xffdd00); });
+      }
+    }
   }
+}
+
+// 味方シャケ召喚用: salmonEntityを味方として生成
+function spawnAllySalmon(sx, sz){
+  salmonWave = salmonWave || 1;
+  const prev = salmonWave;
+  salmonWave = 1; // WAVE1相当の強さ
+  // 元のspawnSalmonEntityを呼んで後から属性変更
+  const prevLen = salmonEntities.length;
+  spawnSalmonEntity();
+  salmonWave = prev;
+  if(salmonEntities.length > prevLen){
+    const s = salmonEntities[salmonEntities.length-1];
+    s.x = sx; s.z = sz;
+    s.group.position.set(sx, 0, sz);
+    return s;
+  }
+  return null;
 }
 
 // ===== 新必殺技の更新処理 =====
@@ -8207,10 +8262,12 @@ function initHeroMode(){
     resetCharState(cpu);
     cpu.alive=true; if(cpu.group) cpu.group.visible=true;
     cpu.hits=0;
-    // プレイヤーにレールガンを強制装備
+    // プレイヤーにレールガンを強制装備・必殺技を味方シャケ召喚に固定
     player.weapon = 'railgun';
+    player.ultType = 'ally_salmon';
+    player.ultGauge = ULT_MAX; // 常時満タン
     updateWeaponVisual(player);
-    showCenterMessage('⚡ オール・ザ・レールガン装備！');
+    showCenterMessage('⚡ オール・ザ・レールガン装備！🐟 味方シャケ召喚スタンバイ！');
     cpu._bossMaxHp  = 100; // HP100×3段階
     cpu._bossHp     = cpu._bossMaxHp;
     cpu._bossPhase  = 1;
@@ -8406,7 +8463,11 @@ function updateHeroMode(dt){
     cpu._bossRadar.position.set(cpu.x, 0.5 + Math.sin(Date.now()*0.005)*0.3, cpu.z);
     cpu._bossRadar.visible = true;
 
-    const hpRatio = 1 - (cpu.hits / cpu._bossMaxHp);
+    // ボス戦中はプレイヤーの必殺技ゲージを常時満タン
+    if(heroStage && heroStage.type === 'boss'){
+      player.ultGauge = ULT_MAX;
+      player.ultType = 'ally_salmon';
+    }
     heroProgress = cpu._bossPhase*33 + Math.floor((1-hpRatio)*33);
 
 
