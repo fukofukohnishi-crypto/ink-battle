@@ -5646,32 +5646,26 @@ function spawnAllySalmon(sx, sz){
 
 function updateAllySalmons(dt){
   for(let i=allySalmonEntities.length-1;i>=0;i--){
-    const s = allySalmonEntities[i];
-    if(!s.alive){ scene.remove(s.group); allySalmonEntities.splice(i,1); continue; }
-    s._allyLifeTimer -= dt;
-    if(s._allyLifeTimer <= 0){ scene.remove(s.group); allySalmonEntities.splice(i,1); continue; }
-    if(s._stunTimer > 0){ s._stunTimer -= dt; continue; }
-    // 敵を攻撃
-    const targets = characters.filter(c=>c.team==='enemy'&&c.alive&&!c.downed);
-    if(cpu._bossMaxHp&&cpu.alive&&!cpu.downed) targets.push(cpu);
-    if(targets.length===0) continue;
-    let nearest=targets[0], nearDist=Infinity;
-    targets.forEach(ch=>{
-      const dx=ch.x-s.x, dz=ch.z-s.z, d=dx*dx+dz*dz;
-      if(d<nearDist){nearDist=d;nearest=ch;}
-    });
-    const dist=Math.sqrt(nearDist)||0.001;
-    const dx=(nearest.x-s.x)/dist, dz=(nearest.z-s.z)/dist;
-    s.yaw=Math.atan2(dx,dz);
-    s.x+=dx*BASE_SPEED*0.9*dt; s.z+=dz*BASE_SPEED*0.9*dt;
+    const s=allySalmonEntities[i];
+    if(!s.alive){scene.remove(s.group);allySalmonEntities.splice(i,1);continue;}
+    s._allyLifeTimer-=dt;
+    if(s._allyLifeTimer<=0){scene.remove(s.group);allySalmonEntities.splice(i,1);continue;}
+    if(s._stunTimer>0){s._stunTimer-=dt;continue;}
+    // ターゲット: cpuボスか敵キャラ
+    const target = (cpu._bossMaxHp&&cpu.alive&&!cpu.downed) ? cpu
+      : characters.find(c=>c.team==='enemy'&&c.alive&&!c.downed);
+    if(!target) continue;
+    const dx=target.x-s.x, dz=target.z-s.z;
+    const dist=Math.sqrt(dx*dx+dz*dz)||0.001;
+    s.x+=dx/dist*BASE_SPEED*0.9*dt;
+    s.z+=dz/dist*BASE_SPEED*0.9*dt;
     s.group.position.set(s.x,0,s.z);
-    s.group.rotation.y=s.yaw;
-    s.fireTimer-=dt;
+    s.group.rotation.y=Math.atan2(dx,dz);
+    s.fireTimer=(s.fireTimer||0)-dt;
     if(dist<3.5&&s.fireTimer<=0){
-      s.fireTimer=0.8;
-      applyDamage(nearest,HITS_PER_LIFE*0.25,null);
-      flashCharacter(nearest);
-      addFloorSplat(nearest.x,nearest.z,BIG_SPLAT_R*0.7,'yellow',0);
+      s.fireTimer=1.0;
+      applyDamage(target,HITS_PER_LIFE*0.25,null);
+      flashCharacter(target);
     }
   }
 }
@@ -8456,23 +8450,15 @@ function updateHeroMode(dt){
     const inBossRange = bdist <= bossFireRange;
 
     if(!inBossRange){
-      // 射程外: プレイヤーへ接近しながら周囲を塗り広げる
+      // 射程外: 接近のみ(塗りは削除)
       cpu.x += (bdx/bdist) * BASE_SPEED * 1.5 * dt;
       cpu.z += (bdz/bdist) * BASE_SPEED * 1.5 * dt;
       if(cpu.group) cpu.group.position.set(cpu.x, cpu.group.position.y, cpu.z);
-      // 周囲を塗り広げる
-      if(Math.random() < dt * 4){
-        const ang = Math.random() * Math.PI * 2;
-        const r = Math.random() * FIRE_RANGE * 0.8;
-        addFloorSplat(cpu.x + Math.cos(ang)*r, cpu.z + Math.sin(ang)*r,
-          BIG_SPLAT_R * 1.5, cpu.colorName, cpu.groundY||0);
-      }
     } else {
-      // 射程内: 常時攻撃(fireTimerを無視して発射)
+      // 射程内: 通常の射撃クールダウンで攻撃
       cpu.fireTimer = Math.max(0, cpu.fireTimer - dt);
       if(cpu.fireTimer <= 0){
-        cpu.fireTimer = FIRE_COOLDOWN * 0.5; // 通常の2倍速射
-        // 武器に合わせて攻撃
+        cpu.fireTimer = FIRE_COOLDOWN * 1.5; // 通常より少し遅め
         const wDef = WEAPON_DB[cpu.weapon];
         if(wDef){
           if(wDef.baseType === 'gun')
@@ -8484,27 +8470,23 @@ function updateHeroMode(dt){
           else if(wDef.baseType === 'parasol')
             fireParasolWeapon(cpu, cpu.yaw, false, wDef);
         }
-        cpu.ink = MAX_INK; // ボスはインク切れなし
+        cpu.ink = MAX_INK;
       }
     }
 
-    // 潜伏中でも赤い光でボスの位置を示す
+    // レーダー(毎フレーム生成しない・位置のみ更新)
     if(!cpu._bossRadar){
-      const radarGeo = new THREE.SphereGeometry(1.5, 8, 6);
-      const radarMat = new THREE.MeshBasicMaterial({
-        color:0xff0000, transparent:true, opacity:0.5, depthWrite:false
-      });
-      cpu._bossRadar = new THREE.Mesh(radarGeo, radarMat);
+      cpu._bossRadar = new THREE.Mesh(
+        new THREE.SphereGeometry(1.5, 6, 5),
+        new THREE.MeshBasicMaterial({color:0xff0000, transparent:true, opacity:0.5, depthWrite:false})
+      );
       scene.add(cpu._bossRadar);
     }
-    cpu._bossRadar.position.set(cpu.x, 0.5 + Math.sin(Date.now()*0.005)*0.3, cpu.z);
-    cpu._bossRadar.visible = true;
+    cpu._bossRadar.position.set(cpu.x, 0.5, cpu.z);
 
-    // ボス戦中はプレイヤーの必殺技ゲージを高速回復(5秒で満タン)
-    if(heroStage && heroStage.type === 'boss'){
-      player.ultGauge = Math.min(ULT_MAX, player.ultGauge + dt * (ULT_MAX/5));
-      player.ultType = 'ally_salmon';
-    }
+    // ゲージ回復
+    player.ultGauge = Math.min(ULT_MAX, player.ultGauge + dt * (ULT_MAX/5));
+    player.ultType = 'ally_salmon';
     heroProgress = cpu._bossPhase*33 + Math.floor((1-hpRatio)*33);
 
 
