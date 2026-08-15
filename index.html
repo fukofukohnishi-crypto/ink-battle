@@ -8463,9 +8463,9 @@ function updateHeroMode(dt){
     cpu._bossRadar.position.set(cpu.x, 0.5 + Math.sin(Date.now()*0.005)*0.3, cpu.z);
     cpu._bossRadar.visible = true;
 
-    // ボス戦中はプレイヤーの必殺技ゲージを常時満タン
+    // ボス戦中はプレイヤーの必殺技ゲージを高速回復(5秒で満タン)
     if(heroStage && heroStage.type === 'boss'){
-      player.ultGauge = ULT_MAX;
+      player.ultGauge = Math.min(ULT_MAX, player.ultGauge + dt * (ULT_MAX/5));
       player.ultType = 'ally_salmon';
     }
     heroProgress = cpu._bossPhase*33 + Math.floor((1-hpRatio)*33);
