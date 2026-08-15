@@ -4780,7 +4780,10 @@ function applyDamage(ch, amount, attacker){
   const invulnBonus = (ch === player && hasGearEffect(ch,'invulnMore'))
     ? getGearEffect(ch,'invulnMore',0) : 0;
   ch.invuln = 0.25 + invulnBonus;
-  const actualAmount = (ch.tonicTimer > 0) ? (amount||1) / TONIC_TOUGHNESS_MULT : (amount||1);
+  let dmg = (amount||1);
+  // ボスへのダメージは1回最大5に制限(グレートソードフルチャージでも5ダメ)
+  if(ch === cpu && ch._bossMaxHp) dmg = Math.min(dmg, 5);
+  const actualAmount = (ch.tonicTimer > 0) ? dmg / TONIC_TOUGHNESS_MULT : dmg;
   ch.hits += actualAmount;
   // ボス専用HP判定(通常のHITS_PER_LIFEとは別に管理)
   if(ch === cpu && ch._bossMaxHp && ch.hits >= ch._bossMaxHp){
@@ -8302,9 +8305,66 @@ function updateHeroMode(dt){
 
   } else if(stage.type==='boss'){
     if(!cpu.alive || cpu.downed){
+      if(cpu._bossRadar){ scene.remove(cpu._bossRadar); cpu._bossRadar=null; }
       heroComplete(true);
       return;
     }
+
+    // ===== ボス強化AI =====
+    // 潜伏中でも常にプレイヤーの位置を把握してそちらを向く
+    const bdx = player.x - cpu.x, bdz = player.z - cpu.z;
+    const bdist = Math.sqrt(bdx*bdx + bdz*bdz) || 0.001;
+    cpu.yaw = Math.atan2(bdx, bdz);
+    if(cpu.group) cpu.group.rotation.y = cpu.yaw;
+
+    // 射程距離の計算
+    const bossFireRange = FIRE_RANGE * 1.5;
+    const inBossRange = bdist <= bossFireRange;
+
+    if(!inBossRange){
+      // 射程外: プレイヤーへ接近しながら周囲を塗り広げる
+      cpu.x += (bdx/bdist) * BASE_SPEED * 1.5 * dt;
+      cpu.z += (bdz/bdist) * BASE_SPEED * 1.5 * dt;
+      if(cpu.group) cpu.group.position.set(cpu.x, cpu.group.position.y, cpu.z);
+      // 周囲を塗り広げる
+      if(Math.random() < dt * 4){
+        const ang = Math.random() * Math.PI * 2;
+        const r = Math.random() * FIRE_RANGE * 0.8;
+        addFloorSplat(cpu.x + Math.cos(ang)*r, cpu.z + Math.sin(ang)*r,
+          BIG_SPLAT_R * 1.5, cpu.colorName, cpu.groundY||0);
+      }
+    } else {
+      // 射程内: 常時攻撃(fireTimerを無視して発射)
+      cpu.fireTimer = Math.max(0, cpu.fireTimer - dt);
+      if(cpu.fireTimer <= 0){
+        cpu.fireTimer = FIRE_COOLDOWN * 0.5; // 通常の2倍速射
+        // 武器に合わせて攻撃
+        const wDef = WEAPON_DB[cpu.weapon];
+        if(wDef){
+          if(wDef.baseType === 'gun')
+            fireProjectile(cpu, new THREE.Vector3(player.x, 0, player.z), GUN_RANGE);
+          else if(wDef.baseType === 'sword')
+            fireSwordSlashWDef(cpu, cpu.yaw, false, wDef);
+          else if(wDef.baseType === 'sniper')
+            fireProjectile(cpu, new THREE.Vector3(player.x, 0, player.z), SNIPER_RANGE_CHARGED);
+          else if(wDef.baseType === 'parasol')
+            fireParasolWeapon(cpu, cpu.yaw, false, wDef);
+        }
+        cpu.ink = MAX_INK; // ボスはインク切れなし
+      }
+    }
+
+    // 潜伏中でも赤い光でボスの位置を示す
+    if(!cpu._bossRadar){
+      const radarGeo = new THREE.SphereGeometry(1.5, 8, 6);
+      const radarMat = new THREE.MeshBasicMaterial({
+        color:0xff0000, transparent:true, opacity:0.5, depthWrite:false
+      });
+      cpu._bossRadar = new THREE.Mesh(radarGeo, radarMat);
+      scene.add(cpu._bossRadar);
+    }
+    cpu._bossRadar.position.set(cpu.x, 0.5 + Math.sin(Date.now()*0.005)*0.3, cpu.z);
+    cpu._bossRadar.visible = true;
 
     const hpRatio = 1 - (cpu.hits / cpu._bossMaxHp);
     heroProgress = Math.floor((1-hpRatio)*100);
