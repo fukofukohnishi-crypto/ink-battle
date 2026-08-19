@@ -7005,6 +7005,8 @@ function pickNearestEnemy(self){
 
 function updateCPU(self, dt){
   if(!self.alive || self.downed) return;
+  // ボス戦中はupdateHeroModeで独自AIを動かすためスキップ
+  if(self === cpu && self._bossPhase) return;
 
   // スタン中(フリーズボム等): 移動・攻撃を停止してタイマーを消費する
   if(self._stunTimer > 0){
@@ -8293,6 +8295,10 @@ function initHeroMode(){
     resetCharState(cpu);
     cpu.alive=true; if(cpu.group) cpu.group.visible=true;
     cpu.hits=0;
+    // 塗りをリセットして描画負荷を軽減
+    splats.forEach(s=>{ if(s.mesh) scene.remove(s.mesh); });
+    splats.length=0;
+    if(typeof initGrid==='function') initGrid();
     // プレイヤーにレールガンを強制装備・必殺技を味方シャケ召喚に固定
     player.weapon = 'railgun';
     player.ultType = 'ally_salmon';
@@ -8415,131 +8421,73 @@ function updateHeroMode(dt){
     if(heroAreaTimer>=stage.goal) heroComplete(true);
 
   } else if(stage.type==='boss'){
+    // ボス撃破チェック
     if(!cpu.alive || cpu.downed){
       if(cpu._bossPhase < 3){
-        // 次形態へ
         cpu._bossPhase++;
         cpu.alive = true; cpu.downed = false;
-        cpu.hits = 0;
-        cpu.invuln = 2.0;
+        cpu.hits = 0; cpu.invuln = 2.0;
         if(cpu._bossPhase === 2){
           showBossUltMessage('💙 第二形態！', 'フェーズ2: 爆撃モード');
-          cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0x0044ff); });
-        } else if(cpu._bossPhase === 3){
+          cpu.group.traverse(c=>{ if(c.isMesh&&c.material) c.material.color.set(0x0044ff); });
+        } else {
           showBossUltMessage('🔥 第三形態！', 'フェーズ3: 必殺技解放');
-          cpu.group.traverse(c=>{ if(c.material&&c.material.color) c.material.color.set(0xff0000); });
+          cpu.group.traverse(c=>{ if(c.isMesh&&c.material) c.material.color.set(0xff0000); });
           cpu.group.scale.set(3.0, 3.0, 3.0);
         }
         return;
       }
-      // 全形態撃破
       if(cpu._bossRadar){ scene.remove(cpu._bossRadar); cpu._bossRadar=null; }
-      heroComplete(true);
-      return;
+      heroComplete(true); return;
     }
 
-    // ===== ボス強化AI =====
-    // 潜伏中でも常にプレイヤーの位置を把握してそちらを向く
+    // HP比率
+    const hpRatio = Math.max(0, 1 - cpu.hits / cpu._bossMaxHp);
+
+    // プレイヤーへ向かう(updateCPUに任せず直接移動)
     const bdx = player.x - cpu.x, bdz = player.z - cpu.z;
-    const bdist = Math.sqrt(bdx*bdx + bdz*bdz) || 0.001;
+    const bdist = Math.sqrt(bdx*bdx+bdz*bdz)||0.001;
     cpu.yaw = Math.atan2(bdx, bdz);
     if(cpu.group) cpu.group.rotation.y = cpu.yaw;
-
-    // 射程距離の計算
-    const bossFireRange = FIRE_RANGE * 1.5;
-    const inBossRange = bdist <= bossFireRange;
-
-    if(!inBossRange){
-      // 射程外: 接近のみ(塗りは削除)
-      cpu.x += (bdx/bdist) * BASE_SPEED * 1.5 * dt;
-      cpu.z += (bdz/bdist) * BASE_SPEED * 1.5 * dt;
+    if(bdist > FIRE_RANGE*0.8){
+      cpu.x += (bdx/bdist)*BASE_SPEED*dt;
+      cpu.z += (bdz/bdist)*BASE_SPEED*dt;
       if(cpu.group) cpu.group.position.set(cpu.x, cpu.group.position.y, cpu.z);
-    } else {
-      // 射程内: 通常の射撃クールダウンで攻撃
-      cpu.fireTimer = Math.max(0, cpu.fireTimer - dt);
-      if(cpu.fireTimer <= 0){
-        cpu.fireTimer = FIRE_COOLDOWN * 1.5; // 通常より少し遅め
-        const wDef = WEAPON_DB[cpu.weapon];
-        if(wDef){
-          if(wDef.baseType === 'gun')
-            fireProjectile(cpu, new THREE.Vector3(player.x, 0, player.z), GUN_RANGE);
-          else if(wDef.baseType === 'sword')
-            fireSwordSlashWDef(cpu, cpu.yaw, false, wDef);
-          else if(wDef.baseType === 'sniper')
-            fireProjectile(cpu, new THREE.Vector3(player.x, 0, player.z), SNIPER_RANGE_CHARGED);
-          else if(wDef.baseType === 'parasol')
-            fireParasolWeapon(cpu, cpu.yaw, false, wDef);
-        }
-        cpu.ink = MAX_INK;
-      }
     }
 
-    // レーダー(毎フレーム生成しない・位置のみ更新)
+    // フェーズ別行動(重い処理を避けシンプルに)
+    cpu._bossThrowTimer = (cpu._bossThrowTimer||0) - dt;
+    if(cpu._bossPhase === 2 && cpu._bossThrowTimer <= 0){
+      // フェーズ2: 直接ダメージ(throwItemを使わず)
+      applyDamage(player, HITS_PER_LIFE*0.3, cpu);
+      spawnBombFlash(player.x, 0.5, player.z, 0x0044ff);
+      cpu._bossThrowTimer = 3.0;
+    } else if(cpu._bossPhase === 3 && cpu._bossThrowTimer <= 0){
+      applyDamage(player, HITS_PER_LIFE*0.5, cpu);
+      spawnBombFlash(player.x, 0.5, player.z, 0xff4400);
+      cpu._bossThrowTimer = 2.0;
+    }
+
+    // レーダー
     if(!cpu._bossRadar){
       cpu._bossRadar = new THREE.Mesh(
-        new THREE.SphereGeometry(1.5, 6, 5),
-        new THREE.MeshBasicMaterial({color:0xff0000, transparent:true, opacity:0.5, depthWrite:false})
+        new THREE.SphereGeometry(1.5,6,5),
+        new THREE.MeshBasicMaterial({color:0xff0000,transparent:true,opacity:0.5,depthWrite:false})
       );
       scene.add(cpu._bossRadar);
     }
     cpu._bossRadar.position.set(cpu.x, 0.5, cpu.z);
 
-    // ゲージ回復
-    player.ultGauge = Math.min(ULT_MAX, player.ultGauge + dt * (ULT_MAX/5));
+    // プレイヤーゲージ回復
+    player.ultGauge = Math.min(ULT_MAX, player.ultGauge + dt*(ULT_MAX/5));
     player.ultType = 'ally_salmon';
-    heroProgress = cpu._bossPhase*33 + Math.floor((1-hpRatio)*33);
 
-
-    // フェーズ別AI
-    if(cpu._bossPhase === 1){
-      // フェーズ1: 距離に応じて武器切り替え
-      const dx=player.x-cpu.x, dz=player.z-cpu.z;
-      const dist=Math.sqrt(dx*dx+dz*dz);
-      if(dist > FIRE_RANGE*1.5) cpu.weapon='classic_sniper';
-      else if(dist > FIRE_RANGE*0.6) cpu.weapon='standard_shooter';
-      else if(dist > SWORD_RANGE*2) cpu.weapon='standard_parasol';
-      else cpu.weapon='classic_blade';
-      cpu.ultGauge=0; // フェーズ1は必殺技なし
-
-    } else if(cpu._bossPhase === 2){
-      // フェーズ2: スタンダードシューターで攻撃しながら全ボム投擲
-      cpu.weapon='standard_shooter';
-      cpu._bossThrowTimer -= dt;
-      if(cpu._bossThrowTimer <= 0){
-        // 全ボム種からランダムに投げる
-        const throwTypes = Object.keys(THROW_ITEM_DEF);
-        const picked = throwTypes[Math.floor(Math.random()*throwTypes.length)];
-        const target = new THREE.Vector3(player.x, 0, player.z);
-        throwItem(cpu, target, picked);
-        cpu._bossThrowTimer = 1.5; // 1.5秒ごと
-      }
-      cpu.ultGauge=0; // フェーズ2は必殺技なし
-
-    } else if(cpu._bossPhase === 3){
-      // フェーズ3: 全武器ローテーション+必殺技即使用
-      cpu._bossWeaponIdx = (cpu._bossWeaponIdx||0);
-      if(Math.random() < dt*0.5){
-        cpu._bossWeaponIdx = (cpu._bossWeaponIdx+1) % cpu._bossWeapons.length;
-        cpu.weapon = cpu._bossWeapons[cpu._bossWeaponIdx];
-      }
-      cpu.ultGauge = ULT_MAX; // 常にゲージ満タン
-      // フェーズ3ボム投擲も継続
-      cpu._bossThrowTimer -= dt;
-      if(cpu._bossThrowTimer <= 0){
-        const throwTypes = Object.keys(THROW_ITEM_DEF);
-        const picked = throwTypes[Math.floor(Math.random()*throwTypes.length)];
-        throwItem(cpu, new THREE.Vector3(player.x, 0, player.z), picked);
-        cpu._bossThrowTimer = 1.0;
-      }
-    }
-
-    // ボスHPゲージをHUDに表示
+    // HUD更新
     const hpBar = Math.max(0, Math.floor(hpRatio*20));
-    const hpFill = '█'.repeat(hpBar) + '░'.repeat(20-hpBar);
     const phaseColor = cpu._bossPhase===1?'#ffdd00':cpu._bossPhase===2?'#4488ff':'#ff4400';
-    const el = document.getElementById('hero-hud');
-    if(el) el.innerHTML = `⚔️ STAGE 5 | <span style="color:${phaseColor}">フェーズ${cpu._bossPhase}/3</span> | HP: <span style="color:${phaseColor}">${hpFill}</span>`;
-  }
+    const hudEl = document.getElementById('hero-hud');
+    if(hudEl) hudEl.innerHTML = `⚔️ フェーズ${cpu._bossPhase}/3 | HP: <span style="color:${phaseColor}">${'█'.repeat(hpBar)}${'░'.repeat(20-hpBar)}</span>`;
+    heroProgress = cpu._bossPhase*33 + Math.floor((1-hpRatio)*33);
 
   // 時間切れ
   if(matchTime<=0) heroComplete(false);
