@@ -8041,6 +8041,7 @@ const SHOP_ITEMS = {
 let shopTab = 'weapon';
 
 function openShop(){
+  document.getElementById('loading').style.display = 'none';
   document.getElementById('shop-screen').style.display = '';
   document.querySelectorAll('#shop-tabs .wtab').forEach(btn=>{
     btn.onclick = ()=>{ shopTab=btn.dataset.shop; buildShopGrid(); updateShopTabs(); };
@@ -8841,6 +8842,7 @@ function handleMinimapKeys(code){
 
 // animate()とloading非表示は武器選択画面の「出撃！」ボタン押下時に実行される
 
+} // end
 })();
 </script>
 </body>
